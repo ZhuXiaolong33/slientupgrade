@@ -1,93 +1,30 @@
 package com.utstar.upgrade;
 
 import android.app.Service;
-import android.content.Context;
 import android.content.Intent;
-import android.content.pm.IPackageDeleteObserver;
-import android.content.pm.IPackageInstallObserver;
-import android.content.pm.PackageManager;
-import android.net.Uri;
+import android.os.Build;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Log;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 
-import java.io.File;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 
 public class UpgradeService extends Service{
 
     private static final String TAG = "SlientUpgradeService";
-    public final int INSTALL_REPLACE_EXISTING = 2;
-
-    private OnPackagedObserver onInstallPackaged;
-    private PackageInstallObserver observer;
-    private PackageDeleteObserver observerdelete;
     private MyUpgradeSerice myUpgradeSerice;
-    private PackageManager pm;
-//    private Context mContext;
-    private File file;
-    private Method method;
-    private Method uninstallmethod;
 
-    private  int installResultCode = 0;
-    private  int uninstallResultcode = 0;
+
+
 
     public void onCreate() {
         super.onCreate();
         Log.i(TAG,"---Service onCreate()---");
 
-        observer = new PackageInstallObserver();
-        observerdelete = new PackageDeleteObserver();
-        pm = this.getPackageManager();
 
-        Class<?>[] types = new Class[] {Uri.class, IPackageInstallObserver.class, int.class, String.class};
-        Class<?>[] uninstalltypes = new Class[] {String.class, IPackageDeleteObserver.class, int.class};
-
-        try {
-            method = pm.getClass().getMethod("installPackage", types);
-            uninstallmethod = pm.getClass().getMethod("deletePackage", uninstalltypes);
-
-        } catch (NoSuchMethodException e) {
-            e.printStackTrace();
-        }
-
-    }
-
-    public void setOnPackagedObserver(OnPackagedObserver onInstallPackaged) {
-        this.onInstallPackaged = onInstallPackaged;
-    }
-
-
-    public void installPackage(Uri apkFile) throws IllegalArgumentException, IllegalAccessException, InvocationTargetException{
-        method.invoke(pm,new Object[] {apkFile, observer, INSTALL_REPLACE_EXISTING, null});
-        Log.i(TAG,"beginTime is "+System.currentTimeMillis()+"observer.finished="+observer.finished);
-        synchronized (observer) {
-            while (!observer.finished) {
-                Log.i(TAG,"installPackage->observer receive notify and observer.finished="+observer.finished);
-                try {
-                    observer.wait();
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-        Log.i(TAG,"endTime is "+System.currentTimeMillis());
-
-    }
-
-    public void uninstallPackage(String packagename) throws IllegalArgumentException, IllegalAccessException, InvocationTargetException {
-
-        uninstallmethod.invoke(pm, new Object[] {packagename,observerdelete, 0});
-        synchronized (observerdelete) {
-            while (!observerdelete.uninstallFinished) {
-                try {
-                    observerdelete.wait();
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
     }
 
     public UpgradeService() {
@@ -96,68 +33,88 @@ public class UpgradeService extends Service{
     public class MyUpgradeSerice extends IUpgaradeInterface.Stub {
 
 
+        int installResultCode = 0;
+        int uninstallResultcode = 0;
+
         @Override
         public int install(String apkPath) throws RemoteException {
-            Log.i(TAG,"MyUpgradeSerice->install("+apkPath+")");
+            String installCmd = "";
+            String installErrorStr = "";
+            String installSucessStr = "";
+            String installLine = "";
+            Log.i(TAG,"MyUpgradeSerice->install("+apkPath+")"+" Build.VERSION.SDK_INT="+Build.VERSION.SDK_INT);
+
+            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT) {
+                installCmd = "pm install -r -d -i com.utstar.upgrade --user 0 " +apkPath;
+            } else {
+                installCmd = "pm install -r -d " + apkPath;
+            }
+
+            Runtime runtime = Runtime.getRuntime();
             try {
-                installPackage(Uri.parse(apkPath));
-            } catch (IllegalAccessException e) {
-                e.printStackTrace();
-            } catch (InvocationTargetException e) {
+                Process process = runtime.exec(installCmd);
+                InputStream errorInput = process.getErrorStream();
+                InputStream inputStream = process.getInputStream();
+                BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+                while ((installLine = bufferedReader.readLine()) != null) {
+                    installSucessStr += installLine;
+                }
+
+                bufferedReader = new BufferedReader(new InputStreamReader(errorInput));
+                while ((installLine = bufferedReader.readLine()) != null) {
+                    installErrorStr += installLine;
+                }
+
+                if (installSucessStr.equals("Success")) {
+                    Log.i(TAG,"install:Success,"+installSucessStr+" return 0");
+                    installResultCode = 0;
+                } else {
+                    Log.i(TAG,"install:error, "+installErrorStr+" return -1");
+                    installResultCode = -1;
+                }
+            } catch (IOException e) {
                 e.printStackTrace();
             }
-            Log.i(TAG,"MyUpgradeSerice->install("+apkPath+")"+"installResultCode="+installResultCode);
             return installResultCode;
         }
 
         @Override
         public int uninstall(String packageName) throws RemoteException {
-            Log.i(TAG,"uninstall("+packageName+")");
+            String uninstallCmd = "";
+            String uninstallErrorStr = "";
+            String uninstallSucessStr = "";
+            String uninstallLine = "";
+            Log.i(TAG,"MyUpgradeSerice->uninstall("+packageName+")");
+            uninstallCmd = "pm uninstall "+ packageName;
+
+            Runtime runtime = Runtime.getRuntime();
             try {
-                uninstallPackage(packageName);
-            } catch (IllegalAccessException e) {
-                e.printStackTrace();
-            } catch (InvocationTargetException e) {
-                e.printStackTrace();
-            }
-            Log.i(TAG,"MyUpgradeSerice->uninstall("+packageName+")"+"uninstallResultcode="+uninstallResultcode);
-            return uninstallResultcode;
-        }
-    }
-
-    public class PackageInstallObserver extends IPackageInstallObserver.Stub {
-        boolean finished;
-        @Override
-        public void packageInstalled(String packageName, int returnCode) throws RemoteException {
-            synchronized (observer) {
-                finished = true;
-
-                if (returnCode == 1) {
-                    installResultCode = 0;
-                } else {
-                    installResultCode = -1;
+                Process process = runtime.exec(uninstallCmd);
+                InputStream errorInput = process.getErrorStream();
+                InputStream inputStream = process.getInputStream();
+                BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+                while ((uninstallLine = bufferedReader.readLine()) != null) {
+                    uninstallSucessStr += uninstallLine;
                 }
-                Log.i(TAG, "packageInstalled(packageName=" + packageName + "," + "returnCode=" + returnCode + ")" + "finished=" + finished);
-                notifyAll();
-            }
-        }
-    }
 
-    public class PackageDeleteObserver extends IPackageDeleteObserver.Stub {
-        boolean uninstallFinished;
-        @Override
-        public void packageDeleted(String packageName, int returnCode) throws RemoteException {
-            synchronized (observerdelete) {
-                uninstallFinished = true;
-                notifyAll();
-                if (returnCode == 1) {
+                bufferedReader = new BufferedReader(new InputStreamReader(errorInput));
+                while ((uninstallLine = bufferedReader.readLine()) != null) {
+                    Log.i(TAG,"uninstallErrorLine=" + uninstallLine);
+                    uninstallErrorStr += uninstallLine;
+                }
+
+                if (uninstallSucessStr.equals("Success")) {
+                    Log.i(TAG,"unintall:Success " + uninstallSucessStr + " return 0");
                     uninstallResultcode = 0;
                 } else {
+                    Log.i(TAG,"uninstall:error "+uninstallErrorStr+" return -1");
                     uninstallResultcode = -1;
                 }
-                Log.i(TAG, "packageDeleted(packageName=" + packageName + ",returnCode=" + returnCode + ")" + "uninstallFinished=" + uninstallFinished);
-                notifyAll();
+            } catch (IOException e) {
+                e.printStackTrace();
             }
+
+            return uninstallResultcode;
         }
     }
 
